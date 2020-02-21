@@ -310,19 +310,34 @@ class XboxController(threading.Thread):
         # how many joysticks are there
         # print pygame.joystick.get_count()
         # get the first joystick
-        self.joy = pygame.joystick.Joystick(joystickNo)
-        # init that joystick
-        self.joy.init()
-        self.connected = True
+        self._testController(joystickNo)
+
+    def _testController(self, joystickNo):
+        """ Test if the controller is connected, leaving it as None if disconencted"""
+        if "360" not in pygame.joystick.Joystick(joystickNo).get_name():
+            self.joy = None
+            self.connected = False
+            pygame.joystick.quit()
+        else:
+            self.joy = pygame.joystick.Joystick(joystickNo)
+            self.joy.quit()
+            self.joy.init()
+            self.connected = True
+
+    def _pygameJsReset(self):
+        """ Reset the pygame joystick interface"""
+        pygame.joystick.quit()
+        pygame.joystick.init()
 
     def _hasController(self):
         """ Check if the controller is connected
 
             Note that, on Ubuntu 18.04 in VirtualBox pygame is incapable of detecting
-            a controller disconnect from the machine without the try/except found in
-            this function.  If "init" is called on a Joystick object that has been
-            disconnected, it will cause a segmentation fault unless checked.  We
-            can use this to our advantage here.
+            a controller disconnect from the machine wihtout the reinitialization of
+            the pygame.joystick interface.  It is extremely hacky, but I have to
+            assume that the name of the xbox controller contains 360, otherwise
+            pygame will assume that all sorts of things (like a virtual mouse)
+            as a game controller.
         """
         now = time.time()
 
@@ -330,21 +345,10 @@ class XboxController(threading.Thread):
         if now - self.lastActive > INACTIVITY_RECONNECT_TIME and \
            now - self.lastTime > RECONNECT_TIMEOUT:
             self.lastTime = now
-            # if it has, quit the joystick
-            self.joy.quit()
-            try:
-                # try to initialize
-                self.joy.init()
-                # if successful (if an exception wasn't thrown), fully initialize
-                self._setupPygame( self.joystickNo )
-                # mark as connected
-                self.connected = True
-                # print "CONNECTED"
+            self._pygameJsReset()
+            self._testController(self.joystickNo)
 
-            except Exception as e:
-                # otherwise, we've disconnected
-                self.connected = False
-                # print "DISCONNECTED"
+            #print "Connected = " + str(self.connected)
 
         return self.connected
 
@@ -393,7 +397,11 @@ class XboxController(threading.Thread):
                         # update control value
                         self.updateControlValue(self.BUTTONCONTROLMAP[event.button],
                                                 self._sortOutButtonValue(event.type))
-        
+        if self.joy is not None:
+            self.joy.quit()
+        pygame.joystick.quit()
+        pygame.quit()
+      
     # stops the controller
     def stop(self):
         self.running = False
