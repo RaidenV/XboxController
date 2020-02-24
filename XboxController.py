@@ -18,6 +18,10 @@
 # Remapped for MadCatz Gamestop controller as I don't currently have an
 # authentic Xbox 360 controller 
 #
+# No auto-retrigger for held axis buttons.  For instance, if the user were to
+# hold the LTHUMBX in the positive direction, the source software wouldn't
+# trigger more than once.
+#
 # History  21 Feb 2020  AFB  Updated
 #
 
@@ -142,6 +146,8 @@ class XboxController(threading.Thread):
 
     # Prevent repeated triggering of buttons
     #   BUTTON NAME    [Debounce(sec), Last time triggered]
+    DEBOUNCE_SEC = 0
+    DEBOUNCE_LTT = 1
     DEBOUNCEMAP = {
         XboxControls.LTHUMBX    : [0.25, 0],
         XboxControls.LTHUMBY    : [0.25, 0],
@@ -161,19 +167,28 @@ class XboxController(threading.Thread):
         XboxControls.LEFTTHUMB  : [0.5, 0],
         XboxControls.RIGHTTHUMB : [0.5, 0],
         XboxControls.DPAD       : [0.5, 0] }
+
+    SCALE = 1
+    DEADZONE = 0.1  
+    AXIS_AUTO_TRIGGER_TIME = 0.25
                         
     # setup xbox controller class
     def __init__(self,
                  controllerCallBack = None,
                  joystickNo = 0,
-                 deadzone = 0.1,
-                 scale = 1,
+                 deadzone = DEADZONE,
+                 scale = SCALE,
                  invertYAxis = True):
 
-        # configure callback master
-        self._master   = master
-        self._vidctrl  = vidTrk
-        self._modectrl = modeCtrl
+	# last value an axis was set to
+        #         AXIS TYPE                  [VALUE, TIME]
+        self._LAV_VAL  = 0
+        self._LAV_TIME = 1
+        self._lastAxisVal = { 
+		self.XboxControls.LTHUMBX    : [0.0, 0.0],
+		self.XboxControls.LTHUMBY    : [0.0, 0.0],
+		self.XboxControls.RTHUMBX    : [0.0, 0.0],
+		self.XboxControls.RTHUMBY    : [0.0, 0.0] }
 
         # setup threading
         threading.Thread.__init__(self)
@@ -314,15 +329,17 @@ class XboxController(threading.Thread):
 
     def _testController(self, joystickNo):
         """ Test if the controller is connected, leaving it as None if disconencted"""
-        if "360" not in pygame.joystick.Joystick(joystickNo).get_name():
-            self.joy = None
-            self.connected = False
-            pygame.joystick.quit()
-        else:
-            self.joy = pygame.joystick.Joystick(joystickNo)
-            self.joy.quit()
-            self.joy.init()
-            self.connected = True
+	if pygame.joystick.get_count() > 0:
+		
+	    if "360" not in pygame.joystick.Joystick(joystickNo).get_name():
+                self.joy = None
+		self.connected = False
+		pygame.joystick.quit()
+            else:
+                self.joy = pygame.joystick.Joystick(joystickNo)
+                self.joy.quit()
+                self.joy.init()
+                self.connected = True
 
     def _pygameJsReset(self):
         """ Reset the pygame joystick interface"""
@@ -376,6 +393,7 @@ class XboxController(threading.Thread):
                     if event.axis in self.AXISCONTROLMAP:
                         # is this a y axis
                         yAxis = True if (event.axis == self.PyGameAxis.LTHUMBY or event.axis == self.PyGameAxis.RTHUMBY) else False
+
                         # update the control value
                         self.updateControlValue(self.AXISCONTROLMAP[event.axis],
                                                 self._sortOutAxisValue(event.value, yAxis))
@@ -397,6 +415,15 @@ class XboxController(threading.Thread):
                         # update control value
                         self.updateControlValue(self.BUTTONCONTROLMAP[event.button],
                                                 self._sortOutButtonValue(event.type))
+
+            # cycle through all axis values
+            for key in self._lastAxisVal.keys():
+                # if the retrigger time has elapsed and the value hasn't returned to zero
+                if self._lastAxisVal[key][self._LAV_TIME] + self.AXIS_AUTO_TRIGGER_TIME < time.time() and \
+                   self._lastAxisVal[key][self._LAV_VAL] > DEADZONE:
+                    # auto-retrigger the value
+                    self._updateControlValue( key, self._lastAxisVal[key][self._LAV_VAL] )
+
         if self.joy is not None:
             self.joy.quit()
         pygame.joystick.quit()
@@ -408,15 +435,21 @@ class XboxController(threading.Thread):
 
     # updates a specific value in the control dictionary
     def updateControlValue(self, control, value):
+
+        if control in self.AXISCONTROLMAP.values():
+            # record the last time the value was updated
+            self._lastAxisVal[control][self._LAV_TIME] = time.time()
+            self._lastAxisVal[control][self._LAV_VAL]  = value
+
         # if the value has changed update it and call the callbacks
         if self.controlValues[control] != value:
             self.controlValues[control] = value
             now = time.time()
             # wait for a debounce period
-            if now > self.DEBOUNCEMAP[control][0] + self.DEBOUNCEMAP[control][1]:
+            if now > self.DEBOUNCEMAP[control][self.DEBOUNCE_LTT] + self.DEBOUNCEMAP[control][self.DEBOUNCE_SEC]:
                 self.doCallBacks(control, value)
-                # update the last executed time
-                self.DEBOUNCEMAP[control][1] = now
+                # update the last time triggered
+                self.DEBOUNCEMAP[control][self.DEBOUCE_LTT] = now
     
     # calls the call backs if necessary
     def doCallBacks(self, control, value):
@@ -489,8 +522,6 @@ if __name__ == '__main__':
     xboxCont.setupControlCallback(xboxCont.XboxControls.RTHUMBY, rightThumbY)
 
     try:
-        # start the controller
-        xboxCont.start()
         print "xbox controller running"
         while True:
             time.sleep(1)
